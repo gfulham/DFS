@@ -4,111 +4,21 @@ import re
 import datetime
 from datetime import datetime, timedelta
 import numpy as np
+import Weekly_DFS_data_load
+
 #head to view all rows
 pd.options.display.max_rows = 1000
-# Clean DK names by removing suffixes
-def clean_name(name):
-    if pd.isna(name):
-        return name
-    
-    # Remove common suffixes (case insensitive)
-    suffixes = r'\b(Jr\.?|Sr\.?|III|II|IV|V)\b'
-    cleaned = re.sub(suffixes, '', str(name), flags=re.IGNORECASE)
-
-    # Remove all punctuation (anything not letter/number/space), replace with space
-    #cleaned = re.sub(r'[^A-Za-z0-9 ]+', ' ', cleaned)
-    # If you want   ONLY letters (no digits), uncomment the next line:
-    cleaned = re.sub(r'[^A-Za-z ]+', ' ', cleaned)
-    # Collapse multiple spaces and trim
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    
-    return cleaned
-# Get todays date in YYYY_MM_DD
-
-today = datetime.today()
-print(f"Today's date is: {today}")
-
-#This Sunday
-Sunday = today - timedelta(days=(datetime.now().weekday() + 1) % 7) 
-Sunday = Sunday.strftime('%Y_%m_%d')
-print(f"Last Sunday's date was: {Sunday}")
-
-# Clean the position column to remove /Flex
-def clean_position(pos):
-    if pd.isna(pos):
-        return pos
-    return pos.replace('/Flex', '')
-
-# %%
-DK_salaries = pd.read_csv(f"C:\\Users\\onlyu\\OneDrive\\Fantasy Football\\data\\DKSalaries_{Sunday}.csv")
-Vegas_projection = pd.read_csv(f"C:\\Users\\onlyu\\OneDrive\\Fantasy Football\\data\\vegas_ppr_proj_{Sunday}.csv")
-FD_salaries = pd.read_csv(f"C:\\Users\\onlyu\\OneDrive\\Fantasy Football\\data\\FDSalaries_{Sunday}.csv")
-Ownership_projections = pd.read_csv(f"C:\\Users\\onlyu\\OneDrive\\Fantasy Football\\data\\rotowire_ownership_projection_{Sunday}.csv")
-FFA_projections = pd.read_csv(f"C:\\Users\\onlyu\\OneDrive\\Fantasy Football\\data\\FFA_Projections_{Sunday}.csv")
-
 
 
 # %% [markdown]
-# DST Comes from FFA Projections since vegas does not have lines for defenses
+# #### Data Files Needed to Run
+# Draftkings, FFA, Vegas (Name & Projection)
 
 # %%
-DST_projections = FFA_projections[FFA_projections['position'] == 'DST']
-DST_projections = DST_projections[['player', 'points']]
-DST_projections = DST_projections.rename(columns={'points': 'Projection', 'player': 'Name'})
-display(DST_projections)
+merged_df, best_values = Weekly_DFS_data_load.load_weekly_data('2025_12_14')
 
 # %%
-Vegas_projection['Name_Clean'] = Vegas_projection['Name'].apply(clean_name)
-DK_salaries['Name_Clean'] = DK_salaries['Name'].apply(clean_name)
-DK_salaries['Roster Position'] = DK_salaries['Position'].apply(clean_position)
-
-display(DK_salaries.head(1))
-display(Vegas_projection.head(1))
-# Left join DK salaries with Vegas projections on name/player
-
-
-# %%
-
-merged_df = (
-    DK_salaries
-    .merge(Vegas_projection[['Name_Clean', 'Projection']], left_on='Name_Clean', right_on='Name_Clean', how='left')
-    .merge(DST_projections, left_on='Name_Clean', right_on='Name', how='left')
-)
-
-display(merged_df.head(1))
-
-# %%
-
-# combine into a single Projection column (prefer player Vegas proj, fall back to DST proj)
-merged_df['Projection'] = merged_df['Projection_x'].fillna(merged_df['Projection_y'])
-
-
-merged_df = merged_df.drop(columns=['Projection_x', 'Projection_y', 'Name_y'])
-
-
-# %%
-
-print(f"Original DK rows: {len(DK_salaries)}")
-print(f"Merged rows: {len(merged_df)}")
-print(f"Missing projections: {merged_df['Projection'].isna().sum()}")
-
-# Show all players from DK who don't have Vegas projections
-missing_projections = merged_df[merged_df['Projection'].isna()]
-
-print("Players missing projections:")
-print(missing_projections[['Name_Clean', 'Position', 'Salary']].to_string(index=False))
-display(merged_df.sort_values(by='Projection', ascending=False).head(5))
-
-
-# %%
-# Add value calculations to the merged dataframe
-merged_df['Points_Per_Dollar'] = merged_df['Projection'] / merged_df['Salary'] * 1000  # Points per $1000
-
-# Add value rank within each position
-merged_df['Value_Rank'] = merged_df.groupby('Position')['Points_Per_Dollar'].rank(ascending=False)
-
 # Show best values overall
-best_values = merged_df[merged_df['Projection'].notna()].sort_values('Points_Per_Dollar', ascending=False)
 
 print("Best values (Points per $1000):")
 print(best_values[['Name_Clean', 'Position', 'Salary', 'Projection', 'Points_Per_Dollar']].head(10).to_string(index=False))
@@ -166,7 +76,7 @@ def arrs(df):
     )
 
 # Pools as arrays
-qb_sal, qb_pts, qb_names   = arrs(qbs)
+qb_sal, qb_pts, qb_names   = arrs(qbs) #Creates three seperate 1D arrays. 1 each for qb salary, points, and names. Arrays are numbers/indexes
 rb_sal, rb_pts, rb_names   = arrs(rbs)
 wr_sal, wr_pts, wr_names   = arrs(wrs)
 te_sal, te_pts, te_names   = arrs(tes)
@@ -194,16 +104,22 @@ if VERBOSE:
     print(f"Estimated base combos (Q × C(RB,2) × C(WR,3) × TE × DST): {base_total:,}")
 # ...existing code...
 
-
-# %%
 # Precompute RB pairs and WR trios
-# Because we need to select 2 RBs and 3 WRs, we can precompute all combinations
-# and their combined salaries and points to speed up lineup generation
+# Because we need to select 2 RBs and 3 WRs, we can precompute all combinations(not permuatations)
+# np.arange (like python range) creates a 1-dim array of integers from 0 to n_rb-1
+# combinations from itertools generates all possible combinations of the specified length
+# list converts the combinations generator to a list
+# np.array converts the list to a numpy array of specified dtype
+# np.arange creates an array of indicies, cominations creates all combos in tuples, 
+# / list convertes to a list, and np.array converts back to an array
 rb_pairs = np.array(list(combinations(np.arange(n_rb, dtype=np.int16), 2)), dtype=np.int16)  # (Crb,2)
 wr_trios = np.array(list(combinations(np.arange(n_wr, dtype=np.int16), 3)), dtype=np.int16) # (Cwr,3)
 
 Crb, Cwr = len(rb_pairs), len(wr_trios)
 
+# Look up combined salaries and points for each RB pair and WR trio
+# Still an array. Takes the indicies from rb_pairs, and matches the indicies to rb_sal, 
+# then sums the salaries for each pair. Axis=1 means sum across the columns for each row / 1d array.
 rb_pair_sal = rb_sal[rb_pairs].sum(axis=1).astype(np.int32)
 rb_pair_pts = rb_pts[rb_pairs].sum(axis=1).astype(np.float32)
 
@@ -218,13 +134,18 @@ if VERBOSE:
     print("First 2 WR trios (idx):", wr_trios[:2].tolist())
     print("First 3 RB pair names:", [(rb_names[i], rb_names[j]) for i,j in rb_pairs[:3]])
     print("First 2 WR trio names:", [(wr_names[i], wr_names[j], wr_names[k]) for i,j,k in wr_trios[:2]])
+    print("First 3 RB pair salaries:", rb_pair_sal[:3].tolist())
+    print("First 2 WR trio salaries:", wr_trio_sal[:2].tolist())
+    print("First 3 RB pair points:", rb_pair_pts[:3].tolist())
+    print("First 2 WR trio points:", wr_trio_pts[:2].tolist())
 # 
 
 
-# %%
-
-# Build FLEX pool (RB + WR + TE)
-flex_salary = np.concatenate([rb_sal, wr_sal, te_sal]).astype(np.int32)
+# Build FLEX pool (RB + WR + TE) so 20 20 10 would be 50 players
+# Concat joins the three 1-d arrays into a single 1d array of int32
+# The data is laid out like this:
+# [RB0, RB1, ..., RB19, WR0, WR1, ..., WR19, TE0, TE1, ..., TE9]
+flex_salary = np.concatenate([rb_sal, wr_sal, te_sal]).astype(np.int32) #joins the three arrays into a single 1d array of int32
 flex_points = np.concatenate([rb_pts, wr_pts, te_pts]).astype(np.float32)
 flex_names  = np.concatenate([rb_names, wr_names, te_names])
 
@@ -240,29 +161,44 @@ flex_is_wr = np.zeros(n_flex, dtype=bool); flex_is_wr[n_rb:n_rb+n_wr] = True
 flex_is_te = np.zeros(n_flex, dtype=bool); flex_is_te[n_rb+n_wr:] = True
 
 # We do this beacuse we need to know which player in the FLEX pool corresponds to which RB/WR/TE index 
-# Fill th idx arrays with -1 
+# np.Full params are shape, fill_vlaue. Fill th idx arrays with n_flex -1s 
+# Then for each position, we fill in the indices where that position exists in the FLEX pool
+
 flex_rb_idx = np.full(n_flex, -1, dtype=np.int16); flex_rb_idx[:n_rb] = np.arange(n_rb, dtype=np.int16)
 flex_wr_idx = np.full(n_flex, -1, dtype=np.int16); flex_wr_idx[n_rb:n_rb+n_wr] = np.arange(n_wr, dtype=np.int16)
 flex_te_idx = np.full(n_flex, -1, dtype=np.int16); flex_te_idx[n_rb+n_wr:] = np.arange(n_te, dtype=np.int16)
 
 if VERBOSE:
+    print("flex_is_rb:", flex_is_rb) # [True True True True True True True True True True False False False False False False False False False False False False False False False]
     print("flex_rb_idx:", flex_rb_idx)  # [ 0  1  2  3  4  5  6  7  8  9 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1]    
-    print("flex_wr_idx:", flex_wr_idx)  # [-1 -1 -1 -1 -1 -1 -1 -1 -1 -1  0  1  2  3  4  5  6  7  8  9 -1 -1 -1 -1 -1]
-    print("flex_te_idx:", flex_te_idx)  # [-1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1  0  1  2  3  4]
+    #print("flex_wr_idx:", flex_wr_idx)  # [-1 -1 -1 -1 -1 -1 -1 -1 -1 -1  0  1  2  3  4  5  6  7  8  9 -1 -1 -1 -1 -1]
+    #print("flex_te_idx:", flex_te_idx)  # [-1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1  0  1  2  3  4]
     
     # Example: we already chose RB indices (0,1). Which FLEX slots are safe for RB duplication?
     chosen_rb_pair = np.array([0, 1], dtype=np.int16)
+    # np.isin params are element, test_elements
     is_duplicate_rb = np.isin(flex_rb_idx, chosen_rb_pair)  # True where FLEX is RB0 or RB1
     print("dup RB flags:", is_duplicate_rb)  # [ True  True False False False False]
     
 
 
-# %%
-
 # Precompute FLEX overlap masks versus RB-pairs / WR-trios / TE
-# Shapes: (Crb, n_flex), (Cwr, n_flex), (n_te, n_flex)
+# Shapes: (Crb, n_flex) 190x50, (Cwr, n_flex)1140x50, (n_te, n_flex) 10x50
+# Shapes are 1row for each pair, and a column for each FLEX candidate
+# As long as they don't overlap, FLEX candidate is OK
 # rb_flex_ok equals True where FLEX can be that position without duplication of already chosen RBs/WRs/TE
-# This works by broadcasting the flex_idx arrays against the rb_pairs and wr_trios
+
+# this "(~flex_is_rb)[None, :]" means flex is ok if flex is wr or te (not rb)
+# or if flex rb idx is not equal to either of the chosen rb pair
+# Flex_is_rb is a 1d array of bools, where the RB indicies are True, 
+# ~ is the not operator, which inverts the True/False values
+# [None, :] adds a new axis at the front, converting it to a 2d array with 1 row and n_flex columns
+# Cant compare the arrays without adding the new axis 
+# list is shaped (n,) and flex_rb_idx is shaped (n_flex,) [True True... False False...]
+# (~flex_is_rb)[None, :] results in a (1, n_flex) array  [[True True... False False...]]
+# Flex_rb is ok for 
+
+# Can we choose this RB for FLEX without duplicating already chosen RBs?
 rb_flex_ok = (~flex_is_rb)[None, :] | (
     (flex_rb_idx[None, :] != rb_pairs[:, None, 0]) &
     (flex_rb_idx[None, :] != rb_pairs[:, None, 1])
@@ -285,11 +221,13 @@ if VERBOSE:
     print("WR-FLEX overlap mask shape:", wr_flex_ok.shape)
     print("TE-FLEX overlap mask shape:", te_flex_ok.shape)
 
-
-# %%
-
+# Goal here to generate all possible base lineups without FLEX
+# Then we will add FLEX on top of these base lineups
 # Build base grid (QB × RBpair × WRtrio × TE × DST)
-# 
+# meshgrid creates a rectangular grid from two or more 1-D arrays
+# we use this grid because we need to evaluate all combinations of these positions
+# This is a 5D grid with one axis per position group
+# This like a 5 nested for loop over all positions. For qb in range(n_qb): for rbp in range(Crb): etc, 
 iq, irp, iwt, ite, idst = np.meshgrid(
     np.arange(n_qb, dtype=np.int32), # QBs
     np.arange(Crb, dtype=np.int32), # RB pairs
@@ -299,14 +237,17 @@ iq, irp, iwt, ite, idst = np.meshgrid(
     indexing='ij'
 )
 
-# %%
-
 # Flatten base indices
 # Each of these will be a 1D array where each index corresponds to a unique combination of (QB, RB pair, WR trio, TE, DST)
-iq = iq.ravel(); irp = irp.ravel(); iwt = iwt.ravel(); ite = ite.ravel(); idst = idst.ravel()
+iq = iq.ravel() 
+irp = irp.ravel() 
+iwt = iwt.ravel() 
+ite = ite.ravel() 
+idst = idst.ravel()
 
-
-# %%
+#iq   = [QB0, QB0, QB0, QB0, ... QB1, QB1, ...]
+#irp  = [RBpair0, RBpair0, RBpair0, RBpair0, ... RBpair1, ...]
+#iwt  = [WRtrio0, WRtrio1, WRtrio2, ...]
 
 # Compute base salaries and points
 base_salary = (
@@ -339,15 +280,9 @@ keep_iflex = np.empty((0,), dtype=np.int32) # np.empty array to hold indices of 
 keep_points = np.empty((0,), dtype=np.float32)
 keep_salary = np.empty((0,), dtype=np.int32)
 
-# Example:
-# keep_idx	keep_iflex	keep_points	keep_salary
-# 88	    12	        143.5	    49800
-# 27901	    2	        142.9	    50000
-# 203	    50	        142.8	    49900
-
 # Process in chunks to limit memory usage
 chunk = 20000
-for start in range(0, len(base_salary), chunk): # Chunks mean process 20,000 base lineups at a time over the 198 million
+for start in range(0, len(base_salary), chunk): # iterate over base lineups in chunks which don't include the flex position yet
     end = min(start + chunk, len(base_salary))
     bs = base_salary[start:end]
     bp = base_points[start:end]
@@ -483,142 +418,18 @@ for k in order:   # order already sorted by descending points
 
 print(f"Selected {len(selected)} exposure-capped lineups (cap {max_exposure_pct:.0%}, max_per_player={max_per_player})")
 
-# all_lineups = []
-# for k in order:
-#     qb_i, rb1_i, rb2_i, wr1_i, wr2_i, wr3_i, te_i, dst_i, fx_i = (
-#         lineups_np["QB"][k], lineups_np["RB1"][k], lineups_np["RB2"][k],
-#         lineups_np["WR1"][k], lineups_np["WR2"][k], lineups_np["WR3"][k],
-#         lineups_np["TE"][k], lineups_np["DST"][k], lineups_np["FLEX"][k]
-#     )
-#     fx_name = flex_name(fx_i)
-#     lineup = {
-#         "points": float(lineups_np["points"][k]),
-#         "salary": int(lineups_np["salary"][k]),
-#         "QB":  (qb_names[qb_i],  int(qb_sal[qb_i]),  float(qb_pts[qb_i])),
-#         "RB1": (rb_names[rb1_i], int(rb_sal[rb1_i]), float(rb_pts[rb1_i])),
-#         "RB2": (rb_names[rb2_i], int(rb_sal[rb2_i]), float(rb_pts[rb2_i])),
-#         "WR1": (wr_names[wr1_i], int(wr_sal[wr1_i]), float(wr_pts[wr1_i])),
-#         "WR2": (wr_names[wr2_i], int(wr_sal[wr2_i]), float(wr_pts[wr2_i])),
-#         "WR3": (wr_names[wr3_i], int(wr_sal[wr3_i]), float(wr_pts[wr3_i])),
-#         "TE":  (te_names[te_i],  int(te_sal[te_i]),  float(te_pts[te_i])),
-#         "FLEX": fx_name,
-#         "DST": (dst_names[dst_i], int(dst_sal[dst_i]), float(dst_pts[dst_i])),
-#     }
-#     all_lineups.append(lineup)
+for i, lu in enumerate(selected, 1):
+    print(f"\nLineup {i}: points={lu['points']:.2f}, salary={lu['salary']}")
+    print(f"  QB:   {lu['QB'][0]} ({lu['QB'][1]}), {lu['QB'][2]:.2f} pts")
+    print(f"  RB1:  {lu['RB1'][0]} ({lu['RB1'][1]}), {lu['RB1'][2]:.2f} pts")
+    print(f"  RB2:  {lu['RB2'][0]} ({lu['RB2'][1]}), {lu['RB2'][2]:.2f} pts")
+    print(f"  WR1:  {lu['WR1'][0]} ({lu['WR1'][1]}), {lu['WR1'][2]:.2f} pts")
+    print(f"  WR2:  {lu['WR2'][0]} ({lu['WR2'][1]}), {lu['WR2'][2]:.2f} pts")
+    print(f"  WR3:  {lu['WR3'][0]} ({lu['WR3'][1]}), {lu['WR3'][2]:.2f} pts")
+    print(f"  TE:   {lu['TE'][0]}  ({lu['TE'][1]}),  {lu['TE'][2]:.2f} pts")
+    fxn, fxsal, fxpts, fxpos = lu['FLEX']
+    print(f"  FLEX: {fxn} [{fxpos}] ({fxsal}), {fxpts:.2f} pts")
+    print(f"  DST:  {lu['DST'][0]} ({lu['DST'][1]}), {lu['DST'][2]:.2f} pts")
 
-# print(f"Materialized {len(all_lineups):,} top lineups (kept {len(keep_points):,} candidates in buffer)")
-# # ...existing code...
-
-# %% [markdown]
-# ## Trying to reduce the lineup lookup time by using sets. Still Brute force for now. 
-
-# %%
-
-# pick top N lineups while enforcing max exposure
-N = 20
-# Max exposure per player
-max_exposure_pct = .4
-# Calculate max allowed lineups per player based on exposure percentage
-max_per_player = max(1, math.floor(N * max_exposure_pct)) 
-
-all_lineups = selected  # Use the previously selected lineups with exposure capping
-
-# Initialize usage counts for all players to zero
-all_lineups.sort(key=lambda x: x['points'], reverse=True) #Start with highest scoring lineups
-selected = []
-usage = {}  # dictionary with player name and how many lineups they are in
-selected_player_sets = set() # Fast duplicate checking
-
-
-def lineup_player_Name_Cleans(lu):
-    Name_Cleans = [lu['QB'][0], lu['RB1'][0], lu['RB2'][0],
-             lu['WR1'][0], lu['WR2'][0], lu['WR3'][0],
-             lu['TE'][0], lu['FLEX'][0], lu['DST'][0]]
-    return frozenset(Name_Cleans)
-
-# Add lineup similarity checking so we don't pick identical lineups
-def lineups_are_identical(lu1, lu2):
-    return lineup_player_Name_Cleans(lu1) == lineup_player_Name_Cleans(lu2)
-
-# Select lineups while enforcing max exposure and avoiding identical lineups
-for i, lu in enumerate(all_lineups):
-    if len(selected) >= N:
-        break #end loop
-
-    if i % 10000 == 0:
-        print(f"Processed {i:,} lineups, selected {len(selected)}")
-
-
-    # Fast duplicate check using frozenset
-    player_names = lineup_player_Name_Cleans(lu)
-    if player_names in selected_player_sets:
-        continue
-
-
-    # skip if any player would exceed exposure
-    if any(usage.get(n, 0) >= max_per_player for n in player_names):
-        continue
-
-    # accept lineup and increment usage
-    selected.append(lu)
-    for n in player_names: # for each player in the lineup
-        usage[n] = usage.get(n, 0) + 1 # increment player usage count
-    selected_player_sets.add(player_names)
-
-# Display selected lineups
-for i, lineup in enumerate(selected, 1):
-    print(f"\n--- LINEUP #{i} ---")
-    print(f"Total Points: {lineup['points']:.1f} | Salary: ${lineup['salary']:,} | Remaining: ${max_salary - lineup['salary']:,}")
-    print("-" * 60)
-    for pos in ['QB', 'RB1', 'RB2', 'WR1', 'WR2', 'WR3', 'TE', 'FLEX', 'DST']:
-        player_info = lineup[pos]
-        if pos == 'FLEX':
-            Name_Clean, salary, points, position = player_info
-            print(f"{pos:4}: {Name_Clean:25} ${salary:,} ({points:.1f} pts) [{position}]")
-        else:
-            Name_Clean, salary, points = player_info
-            print(f"{pos:4}: {Name_Clean:25} ${salary:,} ({points:.1f} pts)")
-
-print("\nPlayer usage counts (selected lineups):")
-for player, cnt in sorted(usage.items(), key=lambda x: -x[1]):
-    print(f"{player:25}: {cnt} ({cnt/len(selected):.0%} exposure)")
-# ...existing code...
-
-# %%
-from collections import Counter
-
-def lineup_names(lu):
-    return [lu['QB'][0], lu['RB1'][0], lu['RB2'][0],
-            lu['WR1'][0], lu['WR2'][0], lu['WR3'][0],
-            lu['TE'][0], lu['FLEX'][0], lu['DST'][0]]
-
-# Frequency across the 20k materialized lineups
-freq = Counter()
-for lu in all_lineups:
-    freq.update(lineup_names(lu))
-
-print("\nTop 20 player frequencies in 20k materialized:")
-for name, c in freq.most_common(20):
-    print(f"{name:24} {c:6}")
-
-# Try different exposure caps
-for cap in [0.35, 0.5, 0.6, 0.7]:
-    max_per = max(1, math.floor(N * cap))
-    usage = {}
-    selected_tmp = 0
-    for lu in all_lineups:
-        names = lineup_names(lu)
-        if any(usage.get(n,0) >= max_per for n in names):
-            continue
-        selected_tmp += 1
-        for n in names:
-            usage[n] = usage.get(n,0)+1
-        if selected_tmp >= N:
-            break
-    print(f"Cap {cap:.2f}: max_per_player={max_per} selected={selected_tmp}")
-
-# Count unique frozenset lineup cores (should equal len(all_lineups) unless duplicates exist)
-unique_sets = len({frozenset(lineup_names(lu)) for lu in all_lineups})
-print(f"\nUnique player sets in all_lineups: {unique_sets} / {len(all_lineups)}")
 
 
